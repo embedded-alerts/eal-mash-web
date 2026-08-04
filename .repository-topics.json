@@ -1,0 +1,14 @@
+[
+  "alerts",
+  "axum",
+  "eal",
+  "embeddings",
+  "htmx",
+  "maud",
+  "pgvector",
+  "rust",
+  "seaorm",
+  "semantic-search",
+  "supabase",
+  "websocket"
+]
