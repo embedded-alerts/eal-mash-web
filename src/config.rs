@@ -95,7 +95,9 @@ impl ConsoleConfig {
         if host.trim().is_empty() {
             bail!("HOST must not be empty");
         }
-        if let Ok(address) = host.parse::<IpAddr>() && address.is_multicast() {
+        if let Ok(address) = host.parse::<IpAddr>()
+            && address.is_multicast()
+        {
             bail!("HOST must not be a multicast address");
         }
         if port == 0 {
