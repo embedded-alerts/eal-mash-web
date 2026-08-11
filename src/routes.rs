@@ -28,10 +28,7 @@ pub(crate) fn router(state: AppState) -> Router {
 }
 
 async fn index(State(state): State<AppState>) -> Html<String> {
-    Html(
-        views::layout(state.environment, state.tenant_id)
-            .into_string(),
-    )
+    Html(views::layout(state.environment, state.tenant_id).into_string())
 }
 
 #[derive(Debug, Serialize)]
@@ -107,11 +104,7 @@ async fn create_source(
         ),
         Err(error) => api_notice(error),
     };
-    Html(
-        render_sources(&state, Some(notice))
-            .await
-            .into_string(),
-    )
+    Html(render_sources(&state, Some(notice)).await.into_string())
 }
 
 async fn render_sources(state: &AppState, notice: Option<Notice>) -> maud::Markup {
@@ -135,10 +128,7 @@ async fn render_sources(state: &AppState, notice: Option<Notice>) -> maud::Marku
     }
 }
 
-async fn scan_source(
-    State(state): State<AppState>,
-    Path(source_id): Path<Uuid>,
-) -> Html<String> {
+async fn scan_source(State(state): State<AppState>, Path(source_id): Path<Uuid>) -> Html<String> {
     let markup = match state.api.scan_source(source_id).await {
         Ok(report) => views::scan_report(&report),
         Err(error) => views::notice(&api_notice(error)),
@@ -154,20 +144,13 @@ async fn pages(State(state): State<AppState>) -> Html<String> {
     Html(markup.into_string())
 }
 
-async fn search(
-    State(state): State<AppState>,
-    Form(form): Form<SearchForm>,
-) -> Html<String> {
+async fn search(State(state): State<AppState>, Form(form): Form<SearchForm>) -> Html<String> {
     let request = match SemanticSearchRequest::try_from(form) {
         Ok(request) => request,
         Err(message) => {
             return Html(
-                views::notice(&Notice::new(
-                    NoticeKind::Error,
-                    "Search rejected",
-                    message,
-                ))
-                .into_string(),
+                views::notice(&Notice::new(NoticeKind::Error, "Search rejected", message))
+                    .into_string(),
             );
         }
     };

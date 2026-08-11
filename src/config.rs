@@ -13,10 +13,7 @@ pub(crate) enum AppEnvironment {
 
 impl AppEnvironment {
     pub(crate) fn parse(value: Option<&str>) -> anyhow::Result<Self> {
-        let normalized = value
-            .unwrap_or("development")
-            .trim()
-            .to_ascii_lowercase();
+        let normalized = value.unwrap_or("development").trim().to_ascii_lowercase();
         match normalized.as_str() {
             "" | "dev" | "development" => Ok(Self::Development),
             "test" => Ok(Self::Test),
@@ -46,8 +43,8 @@ pub(crate) struct ConsoleConfig {
 impl ConsoleConfig {
     pub(crate) fn from_env() -> anyhow::Result<Self> {
         let environment = AppEnvironment::parse(env::var("APP_ENV").ok().as_deref())?;
-        let api_base_url = env::var("EAL_API_BASE_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:8080/".into());
+        let api_base_url =
+            env::var("EAL_API_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8080/".into());
         let tenant_id = env::var("EAL_TENANT_ID")
             .context("EAL_TENANT_ID is required until Shared Auth tenant claims are wired")?;
         let host = env::var("HOST").unwrap_or_else(|_| "0.0.0.0".into());
@@ -72,8 +69,8 @@ impl ConsoleConfig {
             );
         }
 
-        let mut api_base_url = Url::parse(api_base_url.trim())
-            .context("EAL_API_BASE_URL must be an absolute URL")?;
+        let mut api_base_url =
+            Url::parse(api_base_url.trim()).context("EAL_API_BASE_URL must be an absolute URL")?;
         if !matches!(api_base_url.scheme(), "http" | "https") {
             bail!("EAL_API_BASE_URL must use http or https");
         }
@@ -90,17 +87,15 @@ impl ConsoleConfig {
             api_base_url.set_path(&path);
         }
 
-        let tenant_id = Uuid::parse_str(tenant_id.trim())
-            .context("EAL_TENANT_ID must be a UUID")?;
+        let tenant_id =
+            Uuid::parse_str(tenant_id.trim()).context("EAL_TENANT_ID must be a UUID")?;
         if tenant_id.is_nil() {
             bail!("EAL_TENANT_ID must not be the nil UUID");
         }
         if host.trim().is_empty() {
             bail!("HOST must not be empty");
         }
-        if let Ok(address) = host.parse::<IpAddr>()
-            && address.is_multicast()
-        {
+        if let Ok(address) = host.parse::<IpAddr>() && address.is_multicast() {
             bail!("HOST must not be a multicast address");
         }
         if port == 0 {
@@ -159,6 +154,9 @@ mod tests {
             8081,
         )
         .expect("valid config");
-        assert_eq!(config.api_base_url.as_str(), "https://api.example.com/internal/");
+        assert_eq!(
+            config.api_base_url.as_str(),
+            "https://api.example.com/internal/"
+        );
     }
 }

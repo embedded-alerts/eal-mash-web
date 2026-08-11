@@ -298,8 +298,10 @@ impl TryFrom<SearchForm> for SemanticSearchRequest {
         let source_ids = if form.source_id.trim().is_empty() {
             Vec::new()
         } else {
-            vec![Uuid::parse_str(form.source_id.trim())
-                .map_err(|_| "Selected source ID is invalid.".to_owned())?]
+            vec![
+                Uuid::parse_str(form.source_id.trim())
+                    .map_err(|_| "Selected source ID is invalid.".to_owned())?,
+            ]
         };
 
         let rule_id = form.alert_rule_id.trim();
