@@ -16,6 +16,8 @@ use uuid::Uuid;
 
 #[derive(Clone)]
 struct AppState {
+    // Scaffold readiness signal only: this is not an approved P1 reader. Production product
+    // reads/writes must follow the tenant-safe P1/P2 boundary in docs/web-api-data-access.md.
     db: Option<DatabaseConnection>,
     items: Arc<RwLock<Vec<Item>>>,
     events: broadcast::Sender<String>,
@@ -62,6 +64,8 @@ async fn items_partial(State(state): State<AppState>) -> Html<String> {
     Html(items_markup(&state.items.read().await).into_string())
 }
 
+// Scaffold-only in-memory mutation, not authoritative persistence. A production implementation
+// sends the bounded, authenticated, idempotent command to eal-api over P2.
 async fn create_item(State(state): State<AppState>, Form(input): Form<NewItem>) -> Html<String> {
     let item = Item { id: Uuid::new_v4(), title: input.title, detail: input.detail };
     state.items.write().await.push(item.clone());
