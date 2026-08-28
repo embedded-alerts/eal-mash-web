@@ -1,20 +1,19 @@
-# Architecture
+# Mash console architecture
 
-Maud, Axum, SeaORM, Supabase, HTMX, and WebSocket Embedded Alerts web server.
+## Responsibility boundary
 
-## Fleet
+`eal-mash-web` is a server-rendered operator client for `eal-api`. The browser never receives the development tenant selector and never calls the API directly. All source registration, scans, page reads, semantic searches, and candidate reads flow through the server-side `ApiClient`.
 
-- `eal-interfaces`
-- `eal-api`
-- `eal-mash-web`
-- `eal-leptos-web`
-- `eal-dioxus-web`
-- `eal-sync`
-- `eal-cli`
-- `eal-infra`
-- `embedded-alerts-clients`
-- `embedded-alerts-libs`
-- `embedded-alerts.github.io`
-- `embedded-alerts-monorepo`
+The console does not duplicate source-domain validation or semantic scoring. Local form validation exists only for fast feedback and safer defaults; the API remains authoritative.
 
-Interfaces own wire formats; libraries own reusable domain behavior; clients consume versioned contracts; runtimes own deployment behavior; monorepos coordinate pinned revisions. Edge code is allowlisted and never a generic proxy.
+## Hybrid discovery
+
+External indexes are useful for recall, not authority. A provider result may enter the crawl queue only as a URL candidate. The ingestion runtime must then apply the registered exact-host/path policy, per-hop DNS and redirect checks, robots policy, rate and byte budgets, readable-text extraction, canonical URL identity, normalized SHA-256 content identity, and model-versioned embedding generation.
+
+## Realtime and delivery
+
+The console uses explicit HTMX refreshes instead of the current process-local WebSocket because tenant-filtered authenticated events are not certified. Candidate creation is optional and requires an immutable alert-rule UUID/revision pair. No console route can send a notification.
+
+## Production gates
+
+The service rejects production startup while it depends on `x-eal-tenant-id`. Shared Auth, durable repositories, explicit origins/CSP, self-hosted frontend assets, and the DEN-3460 outbox/delivery state machine are mandatory release gates.
