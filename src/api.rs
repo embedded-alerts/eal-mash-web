@@ -13,6 +13,8 @@ use crate::models::{
 const TENANT_HEADER: &str = "x-eal-tenant-id";
 const MAX_API_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
+/// The console's P2 boundary: all product reads and commands cross one bounded,
+/// server-side HTTP client instead of acquiring database or broker authority.
 #[derive(Clone)]
 pub(crate) struct ApiClient {
     http: reqwest::Client,
@@ -105,6 +107,8 @@ impl ApiClient {
         T: DeserializeOwned,
         B: Serialize + ?Sized,
     {
+        // Redirects stay disabled and failures stay on P2; this client must not
+        // silently fall back to a database read, stateful stream, or queue.
         let endpoint = self.endpoint(path)?;
         let mut request = self
             .http
