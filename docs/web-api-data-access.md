@@ -4,94 +4,101 @@ Embedded Alerts adopts the
 [portfolio four-path ADR](https://github.com/ORESoftware/k8s-cluster/blob/main/docs/architecture/web-api-data-access.md)
 for [ORESoftware/k8s-cluster#1399](https://github.com/ORESoftware/k8s-cluster/issues/1399)
 and [DEN-3960](https://linear.app/denman/issue/DEN-3960/document-4-web-server-to-api-server-data-access-patterns-across-10).
-The selection is per operation and must be revisited before this scaffold is
-promoted to production.
+The path is selected per operation; one process must not inherit every data
+authority merely because several transports exist.
 
-## Current boundary and production target
+## Current boundary
 
-`eal-mash-web` currently combines Maud pages, HTTP handlers, an optional
-database connection used only by health reporting, an in-memory `Vec<Item>`,
-and same-process browser WebSocket wake-ups. It is a foundation scaffold: the
-in-memory create route is not authoritative persistence, the database handle is
-not a reviewed P1 reader, and the browser WebSocket is not P3.
+`eal-mash-web` is a server-rendered development/operator client. The browser
+talks only to the web process, and the web process sends every source, scan,
+page, search, and candidate operation through the server-side `ApiClient` to
+`eal-api`. The current implementation therefore uses P2 exclusively:
 
-The production split is:
-
-| Operation | Path | Decision |
+| Operation | Current path | Decision |
 | --- | --- | --- |
-| Render a tenant's alert-rule/read-model list | P1 only after hardening, otherwise P2 | P1 requires a distinct read-only role, forced tenant scope, and allow-listed views. |
-| Create, change, pause, or delete an alert rule | P2: stateless HTTP | `eal-api` owns validation, idempotency, and the product write. |
-| Receive low-latency API invalidation hints | P3 only if measured | One bounded authenticated subscription per web replica; P2 refresh remains authoritative. |
-| Ingest sources, evaluate rules, and deliver notifications | P4: asynchronous queue | API-owned jobs use durable consumers, commit-before-ack, retry budgets, and DLQ handling. |
-| Browser `/ws` connection | Browser/web transport | Same-process wake-up hint; not web-server-to-API P3 and never authoritative. |
+| Read API health, sources, pages, and match candidates | P2: stateless HTTP | `eal-api` remains authoritative; an API outage renders an explicit unavailable state. |
+| Register a source, request a scan, or run a semantic search that may create candidates | P2: stateless HTTP | The API owns validation, tenant authorization, idempotency, persistence, and write effects. |
+| Direct database read | Disabled | The web process has no database dependency or credential and must not add one without the P1 gates below. |
+| Stateful web-to-API stream | Disabled | HTMX performs explicit refreshes; tenant-filtered authenticated events have not been certified. |
+| NATS or queue publication | Disabled in the web process | Ingestion, evaluation, and delivery orchestration belong to API-owned workers and durable outbox consumers. |
 
-## Path 1: constrained direct reads
+The development tenant header is not production authentication. The service
+already refuses production configuration while it depends on that header, and
+this transport decision does not weaken that release gate.
 
-P1 is not enabled by the current optional `DATABASE_URL`. Before direct reads,
-provision a distinct web-read credential with no DML, DDL, ownership,
-membership, or `BYPASSRLS`; expose only reviewed stable views; derive tenant and
-actor scope from verified identity; force RLS or an equivalent predicate; and
-prove cross-tenant denial. Bound the pool and query timeout, cancel work when
-the HTTP request is canceled, and never fall back to a writer credential.
+## P1: constrained direct reads
 
-Replica/view reads may be stale. UI routes that require read-after-write or an
-authoritative evaluation/delivery state use P2. Browser-session state, if added,
-is web-owned and isolated from product-domain tables; it does not justify
-product DML through P1.
+P1 is intentionally disabled. If measurements later justify it, use a distinct
+web-read role with no DML, DDL, ownership, role membership, migration authority,
+or `BYPASSRLS`. Grant only reviewed stable views, derive tenant and actor scope
+from verified Shared Auth identity, force RLS or equivalent predicates, and
+test cross-tenant denial. Bound the pool and query timeout, cancel abandoned
+work, expose replica staleness, and never fall back to a writer credential.
 
-## Path 2: stateless HTTP
+Reads that require authoritative evaluation/delivery state, read-after-write,
+private source policy decisions, or authorization stay on P2. Browser-session
+storage, if introduced, is isolated web-owned state and does not grant product
+table access.
 
-P2 is the default for alert-rule reads and the required path for every product
-mutation. `eal-api` verifies the caller, tenant, scope, schema version, quotas,
-and request bounds. Mutation clients generate one stable idempotency key per
-logical action and reuse it across transient retries. Set connect and total
-deadlines, cap attempts with jitter, honor `Retry-After`, and do not retry
-authentication, authorization, validation, or conflict responses.
+## P2: stateless HTTP
 
-Propagate W3C trace context and a request ID. Record route template, status
-class, latency, timeout, retry count, idempotency replay/conflict outcome, and
-bounded pool pressure. Do not log alert content, source documents, credentials,
-tenant/customer identifiers, or raw request URLs. A saturated API rejects work
-explicitly; the web tier does not create an unbounded queue or switch to P1.
+P2 is implemented by `ApiClient`. It uses one configured API base URL, blocks
+redirects so tenant context cannot cross an authority boundary, applies bounded
+connect and total deadlines, caps response bodies, and reduces untrusted error
+responses to typed safe notices. The browser never receives the development
+tenant selector and never calls the API directly.
 
-## Path 3: bounded stateful API connection
+Before production, replace `x-eal-tenant-id` with verified Shared Auth workload
+and user context, constrain the API origin, propagate W3C trace context plus a
+request ID, and attach one stable idempotency key to each logical mutation.
+Reuse that key for bounded transient retries. Do not retry authentication,
+authorization, validation, conflict, or policy decisions. Record route
+template, status class, latency, timeout, retry count, idempotency outcome, and
+bounded connection-pool pressure without logging tenant identifiers, source
+content, query text, credentials, or raw URLs.
 
-P3 is reserved for low-latency invalidation/evaluation hints after a measured
-need. The connection must authenticate the web workload and tenant
-subscriptions, cap connections per replica, set connect/idle/lifetime
-deadlines, heartbeat, bound inbound/outbound buffers, reconnect with capped
-jitter, and drain during shutdown. Sequence gaps, overflow, or disconnect force
-an authoritative P2 resync. No alert rule or delivery result is committed by a
-P3 frame. The existing browser WebSocket remains a separate browser/web path.
+API saturation and outages return an explicit unavailable result. The web tier
+must not build an unbounded retry queue, silently switch to P1, or report a
+source, scan, search, candidate, or delivery action as committed when the API
+did not confirm it.
 
-## Path 4: asynchronous NATS or message queue
+## P3: bounded stateful API connection
 
-P4 is the target for source ingestion, rule evaluation, and delivery work whose
-lifetime exceeds an HTTP request. Envelopes are versioned and contain tenant,
-actor/service identity, trace context, stable message/idempotency ID, bounded
-references, attempt metadata, and expiry—not source bodies, secrets, or complete
-customer payloads. Consumers are durable, idempotent, concurrency-bounded, and
-ack only after the result/outbox commit. Configure retry limits, backoff,
-dead-letter policy, graceful drain, and queue age, redelivery, DLQ, and handler
-latency metrics. Publication means accepted, not completed; P2 exposes status.
+P3 remains disabled until a measured latency need and a versioned subscription
+contract exist. Any future connection authenticates the web workload and each
+tenant subscription, caps connections per replica, sets connect, idle, and
+lifetime deadlines, heartbeats, bounds both directions, reconnects with capped
+jitter, and drains on shutdown. Sequence gaps, buffer overflow, and disconnect
+force an authoritative P2 resync. Frames are invalidation hints only; they do
+not register sources, schedule scans, create candidates, or complete delivery.
 
-## Consistency, failure, and backpressure
+## P4: asynchronous NATS or message queue
 
-- `eal-api` owns product writes and authoritative status. The MASH process owns
-  only presentation and any future isolated browser-session state.
-- P1 returns its snapshot; P2 returns accepted/committed API state; P3 is a hint;
-  P4 is asynchronous acceptance until the API result changes.
-- Database, API, stream, and broker failures fail closed with an explicit
-  unavailable or pending state. They never widen tenant scope or change paths.
-- Shutdown stops admission, drains bounded HTTP/P3 work, and leaves unacked P4
-  messages eligible for redelivery.
+P4 belongs behind the API for source ingestion, crawl/index work, embedding
+generation, rule evaluation, and notification delivery. Versioned envelopes
+carry tenant and service identity, trace context, stable message/idempotency ID,
+bounded references, attempt metadata, and expiry—not source bodies, query text,
+provider credentials, or complete customer payloads. Consumers are durable,
+idempotent, concurrency-bounded, and acknowledge only after result/outbox
+commit. Configure retry budgets, backoff, dead-letter policy, graceful drain,
+and queue-age, redelivery, DLQ, and handler-latency metrics.
 
-## Contracts, schema, and migrations
+The web process may request work through P2 and poll authoritative status; it
+does not publish directly to internal subjects. HTTP acceptance means queued or
+accepted, not completed.
+
+## Ownership, consistency, and migrations
+
+- `eal-mash-web` owns presentation and any future isolated browser session
+  state. It does not own product persistence, migrations, or delivery effects.
+- `eal-api` owns source policy, product authorization, writes, and authoritative
+  source, scan, page, match, and delivery status.
+- P1 would return a documented snapshot; P2 returns API-confirmed state; P3 is
+  a hint; P4 is asynchronous acceptance until the authoritative result changes.
+- Database, API, stream, broker, and provider failures fail closed and never
+  widen tenant scope or cause an implicit transport fallback.
 
 Wire contracts belong in `eal-interfaces`; reusable domain behavior belongs in
-`eal-libs`; `eal-api` owns the persistence adapter and product schema. This
-scaffold has no reviewed production migration, which is a deployment blocker,
-not permission to create tables at process startup. The future declarative
-schema and migration history must be named in `eal-api`, verified for tenant
-isolation, and applied by a one-shot migration identity never mounted into the
-MASH web or request-serving API processes.
+the shared core libraries; the API-side persistence boundary owns declarative
+schema and migrations. Migrations run under a one-shot identity that is never
+mounted into either request-serving web or API processes.
