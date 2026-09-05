@@ -1,17 +1,17 @@
-mod api;
-mod config;
-mod models;
-mod routes;
-mod views;
+use std::{env, sync::Arc};
 
-use std::sync::Arc;
-
-use anyhow::Context;
-use api::ApiClient;
-use axum::Router;
-use config::{AppEnvironment, ConsoleConfig};
+use axum::{
+    extract::{Form, State, ws::{Message, WebSocket, WebSocketUpgrade}},
+    response::{Html, IntoResponse},
+    routing::get,
+    Router,
+};
+use futures_util::{SinkExt, StreamExt};
+use maud::{DOCTYPE, Markup, html};
+use sea_orm::{Database, DatabaseConnection};
+use serde::Deserialize;
+use tokio::sync::{broadcast, RwLock};
 use tower_http::trace::TraceLayer;
-use tracing::{info, warn};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -24,37 +24,30 @@ struct AppState {
     supabase_url: Option<String>,
 }
 
+#[derive(Clone)]
+struct Item { id: Uuid, title: String, detail: String }
+
+#[derive(Deserialize)]
+struct NewItem { title: String, detail: String }
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
-
-    let config = ConsoleConfig::from_env()?;
-    let api = ApiClient::new(config.api_base_url.clone(), config.tenant_id)
-        .context("configure Embedded Alerts API client")?;
-    let state = AppState {
-        api: Arc::new(api),
-        environment: config.environment,
-        tenant_id: config.tenant_id,
-    };
-
-    warn!(
-        environment = state.environment.as_str(),
-        tenant_context = "development_header",
-        api_base_url = %config.api_base_url,
-        "Mash console is a development/operator surface; production startup is disabled"
-    );
-
-    let app: Router = routes::router(state).layer(TraceLayer::new_for_http());
-    let listener = tokio::net::TcpListener::bind((config.host.as_str(), config.port))
-        .await
-        .with_context(|| format!("bind {}:{}", config.host, config.port))?;
-    info!(address = %listener.local_addr()?, "Embedded Alerts Mash console listening");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).init();
+    let db = match env::var("DATABASE_URL") { Ok(url) if !url.is_empty() => Some(Database::connect(url).await?), _ => None };
+    let (events, _) = broadcast::channel(256);
+    let state = AppState { db, items: Arc::new(RwLock::new(seed_items())), events, supabase_url: env::var("SUPABASE_URL").ok() };
+    let app = Router::new()
+        .route("/", get(index))
+        .route("/healthz", get(health))
+        .route("/partials/alerts", get(items_partial).post(create_item))
+        .route("/ws", get(ws_upgrade))
+        .layer(TraceLayer::new_for_http())
+        .with_state(state);
+    let host = env::var("HOST").unwrap_or_else(|_| "0.0.0.0".into());
+    let port = env::var("PORT").unwrap_or_else(|_| "8081".into());
+    let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await?;
+    axum::serve(listener, app).await?;
     Ok(())
 }
 
